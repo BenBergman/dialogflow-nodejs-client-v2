@@ -20,6 +20,7 @@ const fs = require('fs');
 const structjson = require('./structjson.js');
 const pump = require('pump');
 const through2 = require('through2');
+const record = require('node-record-lpcm16');
 
 function detectTextIntent(projectId, sessionId, queries, languageCode) {
   // [START dialogflow_detect_intent_text]
@@ -248,6 +249,88 @@ function streamingDetectIntent(
   // [END dialogflow_detect_intent_streaming]
 }
 
+function streamingMicDetectIntent(
+  projectId,
+  sessionId,
+  encoding,
+  sampleRateHertz,
+  languageCode
+) {
+  // [START dialogflow_detect_intent_streaming]
+  // Imports the Dialogflow library
+  const dialogflow = require('dialogflow');
+
+  // Instantiates a sessison client
+  const sessionClient = new dialogflow.SessionsClient();
+
+  // The path to the local file on which to perform speech recognition, e.g.
+  // /path/to/audio.raw const filename = '/path/to/audio.raw';
+
+  // The encoding of the audio file, e.g. 'AUDIO_ENCODING_LINEAR16'
+  // const encoding = 'AUDIO_ENCODING_LINEAR16';
+
+  // The sample rate of the audio file in hertz, e.g. 16000
+  // const sampleRateHertz = 16000;
+
+  // The BCP-47 language code to use, e.g. 'en-US'
+  // const languageCode = 'en-US';
+  let sessionPath = sessionClient.sessionPath(projectId, sessionId);
+
+  const initialStreamRequest = {
+    session: sessionPath,
+    queryParams: {
+      session: sessionClient.sessionPath(projectId, sessionId),
+    },
+    queryInput: {
+      audioConfig: {
+        audioEncoding: encoding,
+        sampleRateHertz: sampleRateHertz,
+        languageCode: languageCode,
+      },
+      singleUtterance: true,
+    },
+  };
+
+  // Create a stream for the streaming request.
+  const detectStream = sessionClient
+    .streamingDetectIntent()
+    .on('error', console.error)
+    .on('data', data => {
+      if (data.recognitionResult) {
+        console.log(
+          `Intermediate transcript: ${data.recognitionResult.transcript}`
+        );
+      } else {
+        console.log(`Detected intent:`);
+        logQueryResult(sessionClient, data.queryResult);
+      }
+    });
+
+  // Write the initial stream request to config for audio input.
+  detectStream.write(initialStreamRequest);
+
+
+  // Stream an audio file from disk to the Conversation API, e.g.
+  // "./resources/audio.raw"
+  pump(
+    record
+      .start({
+        sampleRateHertz: '44100',
+        threshold: 0.5,
+        verbose: false,
+        recordProgram: 'rec',
+        silence: '1.0',
+      })
+      .on('error', console.error),
+    // Format the audio stream into the request format.
+    through2.obj((obj, _, next) => {
+      next(null, {inputAudio: obj});
+    }),
+    detectStream
+  );
+  // [END dialogflow_detect_intent_streaming]
+}
+
 function logQueryResult(sessionClient, result) {
   // Imports the Dialogflow library
   const dialogflow = require('dialogflow');
@@ -391,6 +474,20 @@ const cli = require(`yargs`)
         opts.projectId,
         opts.sessionId,
         opts.filename,
+        opts.encoding,
+        opts.sampleRateHertz,
+        opts.languageCode
+      )
+  )
+  .command(
+    `stream-mic`,
+    `Detects the intent spoken into the microphone by streaming it to the ` +
+      `Conversation API.`,
+    {},
+    opts =>
+      streamingMicDetectIntent(
+        opts.projectId,
+        opts.sessionId,
         opts.encoding,
         opts.sampleRateHertz,
         opts.languageCode
